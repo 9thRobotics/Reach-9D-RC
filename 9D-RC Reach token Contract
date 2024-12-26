@@ -1,16 +1,37 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
+import "@openzeppelin/contracts/utils/math/SafeMath.sol";
+
 contract ReachToken {
+    using SafeMath for uint256;
+
     string public name = "Reach Token";
-    string public symbol = "9D-RC"; // Your chosen symbol
-    uint8 public decimals = 18; // Standard for ERC-20 tokens
-    uint256 public totalSupply = 18000000000 * (10 ** uint256(decimals)); // 18 billion tokens
+    string public symbol = "9D-RC";
+    uint8 public decimals = 18;
+    uint256 public totalSupply = 18000000000 * (10 ** uint256(decimals));
 
     mapping(address => uint256) public balanceOf;
     mapping(address => mapping(address => uint256)) public allowance;
 
     address public owner;
+    bool public paused = false;
+
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    event Paused();
+    event Unpaused();
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Only owner can call this function");
+        _;
+    }
+
+    modifier whenNotPaused() {
+        require(!paused, "Token transfer while paused");
+        _;
+    }
 
     constructor() {
         owner = msg.sender;
@@ -18,48 +39,56 @@ contract ReachToken {
         emit Transfer(address(0), owner, totalSupply);
     }
 
-    modifier onlyOwner() {
-        require(msg.sender == owner, "Only owner can call this function");
-        _;
-    }
-
-    event Transfer(address indexed from, address indexed to, uint256 value);
-    event Approval(address indexed owner, address indexed spender, uint256 value);
-
-    function transfer(address to, uint256 value) public returns (bool success) {
+    function transfer(address to, uint256 value) public whenNotPaused returns (bool success) {
         require(balanceOf[msg.sender] >= value, "Insufficient balance");
-        balanceOf[msg.sender] -= value;
-        balanceOf[to] += value;
+        balanceOf[msg.sender] = balanceOf[msg.sender].sub(value);
+        balanceOf[to] = balanceOf[to].add(value);
         emit Transfer(msg.sender, to, value);
         return true;
     }
 
-    function approve(address spender, uint256 value) public returns (bool success) {
+    function approve(address spender, uint256 value) public whenNotPaused returns (bool success) {
         allowance[msg.sender][spender] = value;
         emit Approval(msg.sender, spender, value);
         return true;
     }
 
-    function transferFrom(address from, address to, uint256 value) public returns (bool success) {
+    function transferFrom(address from, address to, uint256 value) public whenNotPaused returns (bool success) {
         require(balanceOf[from] >= value, "Insufficient balance");
         require(allowance[from][msg.sender] >= value, "Allowance exceeded");
-        balanceOf[from] -= value;
-        balanceOf[to] += value;
-        allowance[from][msg.sender] -= value;
+        balanceOf[from] = balanceOf[from].sub(value);
+        balanceOf[to] = balanceOf[to].add(value);
+        allowance[from][msg.sender] = allowance[from][msg.sender].sub(value);
         emit Transfer(from, to, value);
         return true;
     }
 
     function mint(uint256 amount) public onlyOwner {
-        totalSupply += amount;
-        balanceOf[owner] += amount;
+        totalSupply = totalSupply.add(amount);
+        balanceOf[owner] = balanceOf[owner].add(amount);
         emit Transfer(address(0), owner, amount);
     }
 
     function burn(uint256 amount) public onlyOwner {
         require(balanceOf[owner] >= amount, "Insufficient balance to burn");
-        totalSupply -= amount;
-        balanceOf[owner] -= amount;
+        totalSupply = totalSupply.sub(amount);
+        balanceOf[owner] = balanceOf[owner].sub(amount);
         emit Transfer(owner, address(0), amount);
+    }
+
+    function transferOwnership(address newOwner) public onlyOwner {
+        require(newOwner != address(0), "New owner is the zero address");
+        emit OwnershipTransferred(owner, newOwner);
+        owner = newOwner;
+    }
+
+    function pause() public onlyOwner {
+        paused = true;
+        emit Paused();
+    }
+
+    function unpause() public onlyOwner {
+        paused = false;
+        emit Unpaused();
     }
 }
