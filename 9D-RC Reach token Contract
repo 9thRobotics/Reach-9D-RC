@@ -1,94 +1,113 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.19;
 
-import "@openzeppelin/contracts/utils/math/SafeMath.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol";
 
-contract ReachToken {
-    using SafeMath for uint256;
+contract ReachToken is ERC20Upgradeable, OwnableUpgradeable, ReentrancyGuardUpgradeable, UUPSUpgradeable {
+    string public name;
+    string public symbol;
+    uint256 public constant TOTAL_SUPPLY = 18_000_000_000 * 10**18; // Permanent supply cap
+    uint256 public stakingPool;
+    uint256 public unlockPeriod;
+    uint256 public transactionFee = 50; // 0.5% fee for buyback pool
+    uint256 public treasuryReserve;
+    uint256 public lockedSupply;
 
-    string public name = "Reach Token";
-    string public symbol = "9D-RC";
-    uint8 public decimals = 18;
-    uint256 public totalSupply = 18000000000 * (10 ** uint256(decimals));
+    mapping(address => uint256) public lockedTokens;
+    mapping(address => uint256) public unlockTimestamp;
+    mapping(address => uint256) public stakedBalance;
+    mapping(address => uint256) public stakingTimestamp;
+    mapping(address => uint256) public stakingMultiplier;
 
-    mapping(address => uint256) public balanceOf;
-    mapping(address => mapping(address => uint256)) public allowance;
+    event TokensLocked(address indexed user, uint256 amount, uint256 unlockTime);
+    event TokensUnlocked(address indexed user, uint256 amount);
+    event TokensStaked(address indexed user, uint256 amount, uint256 rewardMultiplier);
+    event TokensUnstaked(address indexed user, uint256 amount);
+    event TokensLockedInReserve(uint256 amountLocked);
+    event TreasuryFunded(uint256 amount);
 
-    address public owner;
-    bool public paused = false;
-
-    event Transfer(address indexed from, address indexed to, uint256 value);
-    event Approval(address indexed owner, address indexed spender, uint256 value);
-    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
-    event Paused();
-    event Unpaused();
-
-    modifier onlyOwner() {
-        require(msg.sender == owner, "Only owner can call this function");
-        _;
+    function initialize() public initializer {
+        __ERC20_init("Reach Token", "9D-RC");
+        __Ownable_init();
+        __ReentrancyGuard_init();
+        __UUPSUpgradeable_init();
+        _mint(msg.sender, TOTAL_SUPPLY);
+        unlockPeriod = 7 days;
+        name = "Reach Token";
+        symbol = "9D-RC";
     }
 
-    modifier whenNotPaused() {
-        require(!paused, "Token transfer while paused");
-        _;
+    function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
+
+    function lockTokens(uint256 _amount) external nonReentrant {
+        require(balanceOf(msg.sender) >= _amount, "Not enough tokens");
+        require(lockedTokens[msg.sender] == 0, "Tokens already locked");
+        
+        _transfer(msg.sender, address(this), _amount);
+        lockedTokens[msg.sender] = _amount;
+        unlockTimestamp[msg.sender] = block.timestamp + unlockPeriod;
+        
+        emit TokensLocked(msg.sender, _amount, unlockTimestamp[msg.sender]);
     }
 
-    constructor() {
-        owner = msg.sender;
-        balanceOf[owner] = totalSupply;
-        emit Transfer(address(0), owner, totalSupply);
+    function unlockTokens() external nonReentrant {
+        require(block.timestamp >= unlockTimestamp[msg.sender], "Tokens still locked");
+        require(lockedTokens[msg.sender] > 0, "No locked tokens");
+        
+        uint256 amount = lockedTokens[msg.sender];
+        lockedTokens[msg.sender] = 0;
+        _transfer(address(this), msg.sender, amount);
+        
+        emit TokensUnlocked(msg.sender, amount);
     }
 
-    function transfer(address to, uint256 value) public whenNotPaused returns (bool success) {
-        require(balanceOf[msg.sender] >= value, "Insufficient balance");
-        balanceOf[msg.sender] = balanceOf[msg.sender].sub(value);
-        balanceOf[to] = balanceOf[to].add(value);
-        emit Transfer(msg.sender, to, value);
-        return true;
+    function stakeTokens(uint256 _amount, uint256 _months) external nonReentrant {
+        require(balanceOf(msg.sender) >= _amount, "Not enough tokens");
+        require(_months == 3 || _months == 6 || _months == 12, "Invalid staking period");
+        
+        _transfer(msg.sender, address(this), _amount);
+        stakedBalance[msg.sender] += _amount;
+        stakingTimestamp[msg.sender] = block.timestamp;
+        stakingMultiplier[msg.sender] = _months == 3 ? 10 : _months == 6 ? 20 : 40;
+        
+        emit TokensStaked(msg.sender, _amount, stakingMultiplier[msg.sender]);
     }
 
-    function approve(address spender, uint256 value) public whenNotPaused returns (bool success) {
-        allowance[msg.sender][spender] = value;
-        emit Approval(msg.sender, spender, value);
-        return true;
+    function unstakeTokens() external nonReentrant {
+        require(stakedBalance[msg.sender] > 0, "No staked tokens");
+        
+        uint256 amount = stakedBalance[msg.sender];
+        stakedBalance[msg.sender] = 0;
+        _transfer(address(this), msg.sender, amount);
+        
+        emit TokensUnstaked(msg.sender, amount);
     }
 
-    function transferFrom(address from, address to, uint256 value) public whenNotPaused returns (bool success) {
-        require(balanceOf[from] >= value, "Insufficient balance");
-        require(allowance[from][msg.sender] >= value, "Allowance exceeded");
-        balanceOf[from] = balanceOf[from].sub(value);
-        balanceOf[to] = balanceOf[to].add(value);
-        allowance[from][msg.sender] = allowance[from][msg.sender].sub(value);
-        emit Transfer(from, to, value);
-        return true;
+    function lockBuybackTokens() external onlyOwner {
+        uint256 balance = balanceOf(address(this));
+        require(balance > 0, "No funds available for lock-up");
+        
+        lockedSupply += balance;
+        emit TokensLockedInReserve(balance);
     }
 
-    function mint(uint256 amount) public onlyOwner {
-        totalSupply = totalSupply.add(amount);
-        balanceOf[owner] = balanceOf[owner].add(amount);
-        emit Transfer(address(0), owner, amount);
+    function fundTreasury(uint256 _amount) external onlyOwner {
+        require(balanceOf(msg.sender) >= _amount, "Insufficient balance");
+        
+        _transfer(msg.sender, address(this), _amount);
+        treasuryReserve += _amount;
+        emit TreasuryFunded(_amount);
     }
 
-    function burn(uint256 amount) public onlyOwner {
-        require(balanceOf[owner] >= amount, "Insufficient balance to burn");
-        totalSupply = totalSupply.sub(amount);
-        balanceOf[owner] = balanceOf[owner].sub(amount);
-        emit Transfer(owner, address(0), amount);
+    // Future-Proofed Placeholder Functions
+    function integrateXRPL() external onlyOwner {
+        // Placeholder for XRPL bridge mechanisms
     }
 
-    function transferOwnership(address newOwner) public onlyOwner {
-        require(newOwner != address(0), "New owner is the zero address");
-        emit OwnershipTransferred(owner, newOwner);
-        owner = newOwner;
-    }
-
-    function pause() public onlyOwner {
-        paused = true;
-        emit Paused();
-    }
-
-    function unpause() public onlyOwner {
-        paused = false;
-        emit Unpaused();
+    function aiDataLogging() external onlyOwner {
+        // Placeholder for AI & robotics on-chain logging
     }
 }
