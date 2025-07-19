@@ -277,8 +277,7 @@ function vote(uint256 proposalId) external whenNotPaused {
     p.voteCount += votes;
     hasVoted[proposalId][msg.sender] = true;
 
-    emit VoteCast(msg.sender, proposalId, votes);
-}
+    emit VoteCast(msg.sender, proposalId, 1); // Always 1 vote per wallet
 
     receive() external payable {
         require(tx.origin == msg.sender, "No contracts allowed");
