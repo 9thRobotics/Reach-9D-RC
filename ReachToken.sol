@@ -265,22 +265,20 @@ contract ReachToken is ERC20("Reach Token", "9D-RC"), Pausable, ReentrancyGuard 
         return price;
     }
 
-    function buyTokens() public payable nonReentrant whenNotPaused {
-        if (msg.value < MIN_PURCHASE) revert AmountTooLow();
-        uint256 price = getTokenPrice();
-        uint256 tokensToBuy = (msg.value * 1e18) / price;
+function vote(uint256 proposalId) external whenNotPaused {
+    if (proposalId >= proposals.length) revert InvalidProposal();
+    Proposal storage p = proposals[proposalId];
+    if (block.timestamp >= p.deadline) revert ProposalExpired();
+    if (hasVoted[proposalId][msg.sender]) revert AlreadyVoted();
 
-        if (tokensToBuy == 0) revert AmountTooLow();
-        if (balanceOf[owner] < tokensToBuy) revert InsufficientSupply();
+    uint256 votes = balanceOf[msg.sender];
+    if (votes == 0) revert NoVotes();
 
-        _transfer(owner, msg.sender, tokensToBuy);
-        tokensSold += tokensToBuy;
+    p.voteCount += votes;
+    hasVoted[proposalId][msg.sender] = true;
 
-        uint256 contribution = (msg.value * buybackAllocation) / 100;
-        buybackReserve += contribution;
-
-        emit TokensBought(msg.sender, msg.value, tokensToBuy);
-    }
+    emit VoteCast(msg.sender, proposalId, votes);
+}
 
     receive() external payable {
         require(tx.origin == msg.sender, "No contracts allowed");
